@@ -41,16 +41,14 @@ impl Biquad {
         let a = 10.0_f32.powf(gain_db / 40.0);
 
         let (b0, b1, b2, a0, a1, a2) = match filter_type {
-            FilterType::Bell => {
-                (
-                    1.0 + alpha * a,
-                    -2.0 * cos,
-                    1.0 - alpha * a,
-                    1.0 + alpha / a,
-                    -2.0 * cos,
-                    1.0 - alpha / a,
-                )
-            }
+            FilterType::Bell => (
+                1.0 + alpha * a,
+                -2.0 * cos,
+                1.0 - alpha * a,
+                1.0 + alpha / a,
+                -2.0 * cos,
+                1.0 - alpha / a,
+            ),
 
             FilterType::LowShelf => {
                 let sqrt_a = a.sqrt();
@@ -80,27 +78,23 @@ impl Biquad {
                 )
             }
 
-            FilterType::HighPass => {
-                (
-                    (1.0 + cos) / 2.0,
-                    -(1.0 + cos),
-                    (1.0 + cos) / 2.0,
-                    1.0 + alpha,
-                    -2.0 * cos,
-                    1.0 - alpha,
-                )
-            }
+            FilterType::HighPass => (
+                (1.0 + cos) / 2.0,
+                -(1.0 + cos),
+                (1.0 + cos) / 2.0,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
 
-            FilterType::LowPass => {
-                (
-                    (1.0 - cos) / 2.0,
-                    1.0 - cos,
-                    (1.0 - cos) / 2.0,
-                    1.0 + alpha,
-                    -2.0 * cos,
-                    1.0 - alpha,
-                )
-            }
+            FilterType::LowPass => (
+                (1.0 - cos) / 2.0,
+                1.0 - cos,
+                (1.0 - cos) / 2.0,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
         };
 
         Self {
@@ -138,13 +132,7 @@ impl EqProcessor {
                     _ => band.gain_db,
                 };
 
-                Biquad::new(
-                    band.filter_type,
-                    sample_rate,
-                    band.freq,
-                    gain,
-                    band.q,
-                )
+                Biquad::new(band.filter_type, sample_rate, band.freq, gain, band.q)
             })
             .collect();
 
@@ -161,7 +149,9 @@ impl EqProcessor {
             x = filter.process(x);
         }
 
-        soft_clip(x).clamp(-0.98, 0.98)
+        let output = x * 0.95;
+
+        output.clamp(-1.0, 1.0)
     }
 
     pub fn process_buffer(&mut self, buffer: &mut [f32]) {

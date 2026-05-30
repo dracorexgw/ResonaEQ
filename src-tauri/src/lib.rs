@@ -9,11 +9,15 @@ use ringbuf::{
     traits::{Consumer, Split},
     HeapRb,
 };
-use serde::{Deserialize, Serialize};
-use std::sync::{mpsc, Arc, Mutex};
 use rustfft::{num_complex::Complex, FftPlanner};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use tauri::Manager;
+use std::sync::{mpsc, Arc, Mutex};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,25 +74,15 @@ struct EqState {
 }
 
 #[tauri::command]
-fn get_live_latency(
-    live_state: tauri::State<LiveEngineState>,
-) -> Result<f32, String> {
-    let latency = live_state
-        .latency_ms
-        .lock()
-        .map_err(|e| e.to_string())?;
+fn get_live_latency(live_state: tauri::State<LiveEngineState>) -> Result<f32, String> {
+    let latency = live_state.latency_ms.lock().map_err(|e| e.to_string())?;
 
     Ok(*latency)
 }
 
 #[tauri::command]
-fn get_live_spectrum(
-    live_state: tauri::State<LiveEngineState>,
-) -> Result<Vec<f32>, String> {
-    let spectrum = live_state
-        .spectrum
-        .lock()
-        .map_err(|e| e.to_string())?;
+fn get_live_spectrum(live_state: tauri::State<LiveEngineState>) -> Result<Vec<f32>, String> {
+    let spectrum = live_state.spectrum.lock().map_err(|e| e.to_string())?;
 
     Ok(spectrum.clone())
 }
@@ -423,11 +417,7 @@ fn update_live_eq(
 }
 
 #[tauri::command]
-fn save_preset(
-    app: tauri::AppHandle,
-    name: String,
-    preset: PresetFile,
-) -> Result<(), String> {
+fn save_preset(app: tauri::AppHandle, name: String, preset: PresetFile) -> Result<(), String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -495,53 +485,35 @@ fn delete_preset(app: tauri::AppHandle, name: String) -> Result<(), String> {
 
 #[tauri::command]
 fn get_resona_data_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     Ok(dir.display().to_string())
 }
 
 #[tauri::command]
-fn export_preset(
-    app: tauri::AppHandle,
-    name: String,
-) -> Result<String, String> {
-    let appdata = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+fn export_preset(app: tauri::AppHandle, name: String) -> Result<String, String> {
+    let appdata = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     let presets_dir = appdata.join("presets");
     let exports_dir = appdata.join("exports");
 
-    std::fs::create_dir_all(&presets_dir)
-        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&presets_dir).map_err(|e| e.to_string())?;
 
-    std::fs::create_dir_all(&exports_dir)
-        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
 
-    let safe_name = name
-        .replace("/", "-")
-        .replace("\\", "-");
+    let safe_name = name.replace("/", "-").replace("\\", "-");
 
     let preset_path = presets_dir.join(format!("{}.json", safe_name));
 
     if !preset_path.exists() {
-        return Err(format!(
-            "Preset '{}' does not exist.",
-            safe_name
-        ));
+        return Err(format!("Preset '{}' does not exist.", safe_name));
     }
 
-    let content = std::fs::read_to_string(&preset_path)
-        .map_err(|e| e.to_string())?;
+    let content = std::fs::read_to_string(&preset_path).map_err(|e| e.to_string())?;
 
     let export_path = exports_dir.join(format!("{}.json", safe_name));
 
-    std::fs::write(&export_path, content)
-        .map_err(|e| e.to_string())?;
+    std::fs::write(&export_path, content).map_err(|e| e.to_string())?;
 
     Ok(export_path.display().to_string())
 }
@@ -549,7 +521,7 @@ fn export_preset(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-            .setup(|app| {
+        .setup(|app| {
             let appdata = app.path().app_data_dir()?;
 
             std::fs::create_dir_all(appdata.join("presets"))?;
@@ -557,6 +529,50 @@ pub fn run() {
             std::fs::create_dir_all(appdata.join("exports"))?;
 
             println!("Resona data directory: {:?}", appdata);
+
+            let show_item = MenuItem::with_id(app, "show", "Show Resona", true, None::<&str>)?;
+            let hide_item = MenuItem::with_id(app, "hide", "Hide Resona", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit Resona", true, None::<&str>)?;
+
+            let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
+
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("ResonaEQ")
+                .icon(app.default_window_icon().unwrap().clone())
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "hide" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
 
             Ok(())
         })
@@ -566,6 +582,12 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_audio_devices,
             apply_eq_preview,
@@ -606,7 +628,8 @@ fn compute_spectrum(samples: &[f32]) -> Vec<f32> {
         .iter()
         .enumerate()
         .map(|(i, sample)| {
-            let hann = 0.5 - 0.5 * ((2.0 * std::f32::consts::PI * i as f32) / fft_size as f32).cos();
+            let hann =
+                0.5 - 0.5 * ((2.0 * std::f32::consts::PI * i as f32) / fft_size as f32).cos();
 
             Complex {
                 re: sample * hann,
