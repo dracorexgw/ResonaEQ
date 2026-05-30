@@ -15,6 +15,15 @@ export type EqState = {
   parametricBands: ParamBand[];
 };
 
+export type PresetFile = EqState & {
+  name: string;
+  favorite?: boolean;
+  category?: string;
+  brand?: string;
+  model?: string;
+  target?: string;
+};
+
 export async function getAudioDevices(): Promise<AudioDevice[]> {
   return invoke<AudioDevice[]>("list_audio_devices");
 }
@@ -37,16 +46,11 @@ export async function testDspEngine(state: EqState): Promise<string> {
   return invoke<string>("test_dsp_engine", { state });
 }
 
-export async function testDspEngineWav(
-  state: EqState
-): Promise<string> {
+export async function testDspEngineWav(state: EqState): Promise<string> {
   return invoke<string>("test_dsp_engine_wav", { state });
 }
 
-export async function playDspTestTone(
-  state: EqState,
-  outputDeviceId: string
-): Promise<string> {
+export async function playDspTestTone(state: EqState, outputDeviceId: string): Promise<string> {
   return invoke<string>("play_dsp_test_tone", {
     state,
     outputDeviceId,
@@ -81,20 +85,15 @@ export async function getResonaDataDir(): Promise<string> {
   return invoke<string>("get_resona_data_dir");
 }
 
-export async function savePresetFile(
-  name: string,
-  preset: EqState & { name: string }
-): Promise<void> {
+export async function savePresetFile(name: string, preset: PresetFile): Promise<void> {
   return invoke<void>("save_preset", {
     name,
     preset,
   });
 }
 
-export async function loadPresetFiles(): Promise<
-  Array<EqState & { name: string }>
-> {
-  return invoke<Array<EqState & { name: string }>>("load_presets");
+export async function loadPresetFiles(): Promise<PresetFile[]> {
+  return invoke<PresetFile[]>("load_presets");
 }
 
 export async function deletePresetFile(name: string): Promise<void> {
@@ -103,9 +102,7 @@ export async function deletePresetFile(name: string): Promise<void> {
   });
 }
 
-export async function exportPresetFile(
-  name: string
-): Promise<string> {
+export async function exportPresetFile(name: string): Promise<string> {
   return invoke<string>("export_preset", {
     name,
   });

@@ -48,7 +48,7 @@ npm run tauri dev
 - Rust commands: `src-tauri/src/lib.rs`
 - Tauri config: `src-tauri/tauri.conf.json`
 
-# ResonaEQ v1.0.0
+# ResonaEQ v1.5.0
 
 A modern real-time system-wide audio equalizer for Windows.
 
@@ -390,25 +390,19 @@ Verify:
 
 # Roadmap
 
-## v1.5.0
-
-- Device Manager
-- Engine Manager
-- Settings Manager
-- Enhanced FFT Analyzer
-- Preset Search
-- Preset Categories
-- Preset Renaming
-- Preset Duplication
-
 ## Future
 
+- APO-Based System-Wide Processing
 - Crossfeed
 - Convolution Filters
-- AutoEQ Import
+- FIR Filter Support
 - Room Correction
+- Speaker Calibration
 - Per-Device Profiles
+- Cloud Sync
+- Mobile Companion App
 - macOS Support
+- Linux Support
 
 ---
 

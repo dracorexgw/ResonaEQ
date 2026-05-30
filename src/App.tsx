@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import JSZip from "jszip";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AudioWaveform,
@@ -36,6 +37,8 @@ import "./index.css";
 import { ParametricEqGraph } from "./components/ParametricEqGraph";
 import type { ParamBand } from "./types/audio";
 import { SetupWizard } from "./components/SetupWizard";
+import { parseAutoEqText } from "./utils/autoEqParser";
+import { detectHeadphone } from "./utils/headphoneDetector";
 
 const AUTO_START_LIVE_KEY = "resona-auto-start-live";
 const LAST_INPUT_DEVICE_KEY = "resona-last-input-device";
@@ -76,6 +79,10 @@ type UserPreset = {
   graphicBands: number[];
   parametricBands: ParamBand[];
   favorite?: boolean;
+  category?: string;
+  brand?: string;
+  model?: string;
+  target?: string;
 };
 
 const PRESET_STORAGE_KEY = "resona-user-presets";
@@ -241,9 +248,7 @@ function WaveVisualizer({ bands }: { bands: number[] }) {
     [bands]
   );
 
-  const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`)
-    .join(" ");
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
 
   const fillPath = `${path} L ${points[points.length - 1].x} ${graphBottom} L ${
     points[0].x
@@ -256,9 +261,7 @@ function WaveVisualizer({ bands }: { bands: number[] }) {
       <div className="relative flex items-center justify-between">
         <div>
           <p className="text-sm text-white/50">Resona Engine</p>
-          <h2 className="mt-1 text-3xl font-black tracking-tight">
-            Resona Core
-          </h2>
+          <h2 className="mt-1 text-3xl font-black tracking-tight">Resona Core</h2>
         </div>
 
         <div className="rounded-full border border-[#1ed760]/30 bg-[#1ed760]/10 px-4 py-2 text-sm font-bold text-[#8cffb2]">
@@ -337,15 +340,7 @@ function WaveVisualizer({ bands }: { bands: number[] }) {
         />
 
         {points.map((p, i) => (
-          <circle
-            key={i}
-            cx={p.x}
-            cy={p.y}
-            r="6"
-            fill="#ffffff"
-            stroke="#1ed760"
-            strokeWidth="3"
-          />
+          <circle key={i} cx={p.x} cy={p.y} r="6" fill="#ffffff" stroke="#1ed760" strokeWidth="3" />
         ))}
       </svg>
     </div>
@@ -353,12 +348,7 @@ function WaveVisualizer({ bands }: { bands: number[] }) {
 }
 
 export default function App() {
-  type ActivePanel =
-    | "equalizer"
-    | "presets"
-    | "devices"
-    | "engine"
-    | "settings";
+  type ActivePanel = "equalizer" | "presets" | "reference" | "devices" | "engine" | "settings";
   const [activePanel, setActivePanel] = useState<ActivePanel>("equalizer");
   const [showSetupWizard, setShowSetupWizard] = useState(() => {
     return localStorage.getItem("resona-setup-complete") !== "true";
@@ -380,9 +370,7 @@ export default function App() {
   const [presetName, setPresetName] = useState("");
   const cableDetected = devices.some((d) => {
     const name = d.name.toLowerCase();
-    return (
-      name.includes("cable") || name.includes("vb-audio") || name.includes("vb")
-    );
+    return name.includes("cable") || name.includes("vb-audio") || name.includes("vb");
   });
   const [liveSpectrum, setLiveSpectrum] = useState<number[]>([]);
   const healthChecks = [
@@ -409,9 +397,38 @@ export default function App() {
   ];
   const DEV_MODE = false;
   const presetFileInputRef = useRef<HTMLInputElement | null>(null);
+  const autoEqFileInputRef = useRef<HTMLInputElement | null>(null);
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [autoStartAttempted, setAutoStartAttempted] = useState(false);
   const [liveLatencyMs, setLiveLatencyMs] = useState(0);
+  const [selectedReferenceProfile, setSelectedReferenceProfile] = useState("");
+  const [referenceSearch, setReferenceSearch] = useState("");
+  const [referenceFilter, setReferenceFilter] = useState<"all" | "favorites" | "reference">("all");
+  const referenceProfiles = userPresets
+    .filter((preset) => {
+      if (referenceFilter === "favorites") {
+        return preset.favorite;
+      }
+
+      if (referenceFilter === "reference") {
+        return preset.category === "reference";
+      }
+
+      return true;
+    })
+    .filter((preset) => {
+      if (!referenceSearch.trim()) {
+        return true;
+      }
+
+      const search = referenceSearch.toLowerCase();
+
+      return (
+        preset.name.toLowerCase().includes(search) ||
+        (preset.brand ?? "").toLowerCase().includes(search) ||
+        (preset.model ?? "").toLowerCase().includes(search)
+      );
+    });
 
   useEffect(() => {
     if (!liveEngineRunning) {
@@ -686,9 +703,7 @@ export default function App() {
 
   async function togglePresetFavorite(name: string) {
     const nextPresets = userPresets.map((preset) =>
-      preset.name === name
-        ? { ...preset, favorite: !preset.favorite }
-        : preset
+      preset.name === name ? { ...preset, favorite: !preset.favorite } : preset
     );
 
     setUserPresets(nextPresets);
@@ -711,10 +726,10 @@ export default function App() {
         const importedPresets: UserPreset[] = Array.isArray(parsed)
           ? parsed
           : Array.isArray(parsed.presets)
-          ? parsed.presets
-          : parsed.name
-          ? [parsed]
-          : [];
+            ? parsed.presets
+            : parsed.name
+              ? [parsed]
+              : [];
 
         if (!Array.isArray(importedPresets) || importedPresets.length === 0) {
           throw new Error("Invalid preset file.");
@@ -870,6 +885,97 @@ export default function App() {
     );
   }
 
+  async function importAutoEqProfile(file: File) {
+    try {
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        await importAutoEqZip(file);
+        return;
+      }
+
+      const raw = await file.text();
+      await importAutoEqText(raw, file.name);
+    } catch (error) {
+      console.error(error);
+      setPreview(`Failed to import AutoEQ profile:\n${String(error)}`);
+    }
+  }
+
+  async function importAutoEqText(raw: string, filename: string) {
+    const parsed = parseAutoEqText(raw, filename);
+
+    const nextParamBands = parsed.parametricBands.slice(0, 10);
+
+    while (nextParamBands.length < 10) {
+      nextParamBands.push({
+        id: nextParamBands.length + 1,
+        type: "bell",
+        freq: 1000,
+        gain: 0,
+        q: 0.7,
+        color: "#ffffff",
+        enabled: false,
+      });
+    }
+
+    const detected = detectHeadphone(filename);
+    const presetName = filename.replace(/\.[^/.]+$/, "").trim();
+
+    setEqMode("parametric");
+    setPreamp(parsed.preamp);
+    setParamBands(nextParamBands);
+
+    await savePresetFile(presetName, {
+      name: presetName,
+      mode: "parametric",
+      preamp: parsed.preamp,
+      graphicBands: bands,
+      parametricBands: nextParamBands,
+      favorite: true,
+      category: "reference",
+      brand: detected.brand,
+      model: detected.model,
+      target: detected.target,
+    });
+
+    const presets = await loadPresetFiles();
+    setUserPresets(presets);
+
+    setPreview(`Imported AutoEQ profile:\n${presetName}`);
+  }
+
+  async function importAutoEqZip(file: File) {
+    const zip = await JSZip.loadAsync(file);
+
+    const candidates = Object.values(zip.files).filter((entry) => {
+      const name = entry.name.toLowerCase();
+
+      return (
+        !entry.dir &&
+        name.endsWith(".txt") &&
+        (name.includes("parametriceq") ||
+          name.includes("parametric eq") ||
+          name.includes("parametric"))
+      );
+    });
+
+    if (candidates.length === 0) {
+      throw new Error("No ParametricEQ.txt file found inside ZIP.");
+    }
+
+    let importedCount = 0;
+
+    for (const entry of candidates) {
+      const raw = await entry.async("text");
+      const filename = entry.name.split("/").pop() || entry.name;
+
+      await importAutoEqText(raw, filename);
+
+      importedCount += 1;
+    }
+
+    setPreview(`Imported ${importedCount} AutoEQ profile(s) from ZIP.`);
+  }
+
   return (
     <main className="flex h-screen bg-[#050505] text-white">
       <aside className="flex w-72 flex-col border-r border-white/10 bg-[#090909] p-6">
@@ -887,6 +993,7 @@ export default function App() {
           {[
             { icon: SlidersHorizontal, label: "Equalizer", panel: "equalizer" },
             { icon: Music2, label: "Presets", panel: "presets" },
+            { icon: Headphones, label: "Reference", panel: "reference" },
             // { icon: Headphones, label: "Devices", panel: "devices" },
             // { icon: RadioTower, label: "Engine", panel: "engine" },
             // { icon: Settings, label: "Settings", panel: "settings" },
@@ -895,9 +1002,7 @@ export default function App() {
               key={panel}
               onClick={() => setActivePanel(panel as ActivePanel)}
               className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition ${
-                activePanel === panel
-                  ? "bg-white/10 text-white"
-                  : "hover:bg-white/[.06]"
+                activePanel === panel ? "bg-white/10 text-white" : "hover:bg-white/[.06]"
               }`}
             >
               <Icon size={18} /> {label}
@@ -907,12 +1012,11 @@ export default function App() {
 
         <div className="mt-auto rounded-3xl border border-white/10 bg-white/[.04] p-4">
           <div className="flex items-center gap-2 text-sm font-bold">
-            <Sparkles size={16} className="text-[#1ed760]" /> ResonaEQ{" "}
-            <span>v1.0.0</span>
+            <Sparkles size={16} className="text-[#1ed760]" /> ResonaEQ <span>v1.5.0</span>
           </div>
           <p className="mt-2 text-xs leading-5 text-white/45">
-            Enhance your audio with powerful EQ controls, custom presets, and
-            real-time sound tuning.
+            Enhance your audio with powerful EQ controls, custom presets, and real-time sound
+            tuning.
           </p>
         </div>
         <button
@@ -929,12 +1033,8 @@ export default function App() {
       <section className="flex-1 overflow-y-auto p-8 ">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <p className="text-sm font-semibold text-[#1ed760]">
-              No Equalizer APO Required
-            </p>
-            <h1 className="mt-1 text-5xl font-black tracking-tight">
-              Standalone Audio Control
-            </h1>
+            <p className="text-sm font-semibold text-[#1ed760]">No Equalizer APO Required</p>
+            <h1 className="mt-1 text-5xl font-black tracking-tight">Standalone Audio Control</h1>
           </div>
           <div className="flex gap-3">
             <button
@@ -996,10 +1096,7 @@ export default function App() {
                     setSelectedDevice(nextDevice);
                     localStorage.setItem(LAST_OUTPUT_DEVICE_KEY, nextDevice);
 
-                    restartLiveEngineWithDevices(
-                      selectedInputDevice,
-                      nextDevice
-                    );
+                    restartLiveEngineWithDevices(selectedInputDevice, nextDevice);
                   }}
                   className="mt-4 w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none"
                 >
@@ -1018,8 +1115,8 @@ export default function App() {
                     {liveEngineRunning
                       ? "Live Engine Running"
                       : standaloneRunning
-                      ? "Standalone Engine Running"
-                      : "Offline"}
+                        ? "Standalone Engine Running"
+                        : "Offline"}
                   </b>
                 </div>
               </div>
@@ -1067,9 +1164,7 @@ export default function App() {
                       <div>
                         <h2 className="text-2xl font-black">Equalizer</h2>
                         <p className="text-sm text-white/40">
-                          {eqMode === "graphic"
-                            ? "10-band DSP profile"
-                            : "Parametric DSP profile"}
+                          {eqMode === "graphic" ? "10-band DSP profile" : "Parametric DSP profile"}
                         </p>
                       </div>
 
@@ -1078,9 +1173,7 @@ export default function App() {
                           <button
                             onClick={() => setEqMode("graphic")}
                             className={`rounded-full px-4 py-2 text-sm font-black ${
-                              eqMode === "graphic"
-                                ? "bg-white text-black"
-                                : "text-white/50"
+                              eqMode === "graphic" ? "bg-white text-black" : "text-white/50"
                             }`}
                           >
                             Graphic
@@ -1089,9 +1182,7 @@ export default function App() {
                           <button
                             onClick={() => setEqMode("parametric")}
                             className={`rounded-full px-4 py-2 text-sm font-black ${
-                              eqMode === "parametric"
-                                ? "bg-[#1ed760] text-black"
-                                : "text-white/50"
+                              eqMode === "parametric" ? "bg-[#1ed760] text-black" : "text-white/50"
                             }`}
                           >
                             Parametric
@@ -1136,9 +1227,7 @@ export default function App() {
                                   value={value}
                                   onChange={(e) =>
                                     setBands((prev) =>
-                                      prev.map((b, i) =>
-                                        i === index ? Number(e.target.value) : b
-                                      )
+                                      prev.map((b, i) => (i === index ? Number(e.target.value) : b))
                                     )
                                   }
                                   style={{
@@ -1156,9 +1245,7 @@ export default function App() {
                                 />
                               </div>
 
-                              <div className="text-xs font-black text-white/70">
-                                {freqs[index]}
-                              </div>
+                              <div className="text-xs font-black text-white/70">{freqs[index]}</div>
                             </div>
                           ))}
                         </div>
@@ -1181,7 +1268,7 @@ export default function App() {
                       </>
                     )}
                   </div>
-                                    <div className="rounded-[2rem] border border-white/10 bg-[#111] p-5">
+                  <div className="rounded-[2rem] border border-white/10 bg-[#111] p-5">
                     <h3 className="text-xl font-black">Preset Mini-Manager</h3>
                     <div className="mt-3 flex gap-2">
                       <button
@@ -1224,9 +1311,7 @@ export default function App() {
                     </div>
                   </div>
                   <div className="rounded-[2rem] border border-white/10 bg-[#111] p-5">
-                    <h3 className="text-xl font-black">
-                      Favorite User Presets
-                    </h3>
+                    <h3 className="text-xl font-black">Favorite User Presets</h3>
 
                     <div className="mt-4 space-y-3">
                       {favoriteUserPresets.length === 0 ? (
@@ -1259,19 +1344,13 @@ export default function App() {
                                 className="rounded-full border border-white/10 px-3 py-1 text-xs font-black text-white/60 hover:bg-white/10 cursor-pointer"
                                 onClick={async () => {
                                   try {
-                                    const path = await exportPresetFile(
-                                      preset.name
-                                    );
+                                    const path = await exportPresetFile(preset.name);
 
-                                    setPreview(
-                                      `Exported ${preset.name} to:\n${path}`
-                                    );
+                                    setPreview(`Exported ${preset.name} to:\n${path}`);
                                   } catch (err) {
                                     console.error(err);
 
-                                    setPreview(
-                                      `Failed to export ${preset.name}`
-                                    );
+                                    setPreview(`Failed to export ${preset.name}`);
                                   }
                                 }}
                               >
@@ -1290,9 +1369,7 @@ export default function App() {
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-lg font-black">Launch on startup</h3>
-                      <p className="text-xs text-white/40">
-                        Start Resona with Windows
-                      </p>
+                      <p className="text-xs text-white/40">Start Resona with Windows</p>
                     </div>
 
                     <button
@@ -1312,9 +1389,7 @@ export default function App() {
                 <div className="mt-4 rounded-[2rem] border border-white/10 bg-[#111] p-5">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-lg font-black">
-                        Auto-start Live Engine
-                      </h3>
+                      <h3 className="text-lg font-black">Auto-start Live Engine</h3>
                       <p className="text-xs text-white/40">
                         Start audio routing automatically on launch
                       </p>
@@ -1346,25 +1421,13 @@ export default function App() {
                   <div className="mt-4 space-y-3">
                     <StatusItem label="VB-CABLE Detected" ok={cableDetected} />
 
-                    <StatusItem
-                      label="Capture Device Selected"
-                      ok={!!selectedInputDevice}
-                    />
+                    <StatusItem label="Capture Device Selected" ok={!!selectedInputDevice} />
 
-                    <StatusItem
-                      label="Output Device Selected"
-                      ok={!!selectedDevice}
-                    />
+                    <StatusItem label="Output Device Selected" ok={!!selectedDevice} />
 
-                    <StatusItem
-                      label="Live Engine Running"
-                      ok={liveEngineRunning}
-                    />
+                    <StatusItem label="Live Engine Running" ok={liveEngineRunning} />
 
-                    <StatusItem
-                      label="Live EQ Connected"
-                      ok={liveEngineRunning}
-                    />
+                    <StatusItem label="Live EQ Connected" ok={liveEngineRunning} />
                   </div>
                 </div>
                 <div className="rounded-[2rem] border border-white/10 bg-[#111] p-5">
@@ -1381,9 +1444,7 @@ export default function App() {
                         className="w-full rounded-3xl bg-white/[.045] p-4 text-left transition hover:bg-white/[.08]"
                       >
                         <div className="font-black">{preset.name}</div>
-                        <div className="mt-1 text-xs text-white/40">
-                          {preset.desc}
-                        </div>
+                        <div className="mt-1 text-xs text-white/40">{preset.desc}</div>
                       </button>
                     ))}
                   </div>
@@ -1399,9 +1460,7 @@ export default function App() {
                 </div>
                 <div className="rounded-[2rem] border border-white/10 bg-[#111] p-5">
                   <div className="mb-3 flex flex-col gap-2 font-black">
-                    <div className="mb-3 flex items-center gap-2 font-black">
-                      Latency
-                    </div>
+                    <div className="mb-3 flex items-center gap-2 font-black">Latency</div>
                     <div className="font-bold text-sm">
                       <span className=""> Current Latency: </span>
                       <span
@@ -1409,13 +1468,11 @@ export default function App() {
                           liveLatencyMs < 25
                             ? "text-[#1ed760]"
                             : liveLatencyMs < 60
-                            ? "text-yellow-300"
-                            : "text-red-400"
+                              ? "text-yellow-300"
+                              : "text-red-400"
                         }
                       >
-                        {liveEngineRunning
-                          ? `${liveLatencyMs.toFixed(1)} ms`
-                          : "Offline"}
+                        {liveEngineRunning ? `${liveLatencyMs.toFixed(1)} ms` : "Offline"}
                       </span>
                     </div>
                   </div>
@@ -1491,6 +1548,173 @@ export default function App() {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        )}
+        {activePanel === "reference" && (
+          <div className="rounded-[2rem] border border-white/10 bg-[#111] p-6">
+            <h2 className="text-3xl font-black">Reference Profiles</h2>
+            <p className="mt-1 text-sm text-white/40">
+              Import AutoEQ parametric EQ files and convert them into Resona presets.
+            </p>
+            <div className="mt-6 flex items-center justify-between">
+              <h3 className="text-xl font-black">Imported Reference Profiles</h3>
+
+              <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-black">
+                {referenceProfiles.length}
+              </span>
+            </div>
+            <div className="mt-6">
+              <input
+                value={referenceSearch}
+                onChange={(e) => setReferenceSearch(e.target.value)}
+                placeholder="Search profiles..."
+                className="w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none"
+              />
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setReferenceFilter("all")}
+                className={`rounded-full px-4 py-2 text-xs font-black ${
+                  referenceFilter === "all" ? "bg-[#1ed760] text-black" : "bg-white/10 text-white"
+                }`}
+              >
+                All
+              </button>
+
+              <button
+                onClick={() => setReferenceFilter("reference")}
+                className={`rounded-full px-4 py-2 text-xs font-black ${
+                  referenceFilter === "reference"
+                    ? "bg-[#1ed760] text-black"
+                    : "bg-white/10 text-white"
+                }`}
+              >
+                Reference
+              </button>
+
+              <button
+                onClick={() => setReferenceFilter("favorites")}
+                className={`rounded-full px-4 py-2 text-xs font-black ${
+                  referenceFilter === "favorites"
+                    ? "bg-[#1ed760] text-black"
+                    : "bg-white/10 text-white"
+                }`}
+              >
+                Favorites
+              </button>
+            </div>
+            <div className="mt-6 rounded-3xl bg-white/[.04] p-5 mb-5">
+              <h3 className="text-xl font-black">Headphone Switcher</h3>
+              <p className="mt-2 text-sm text-white/45">
+                Quickly load an imported reference profile.
+              </p>
+
+              <select
+                value={selectedReferenceProfile}
+                onChange={(e) => {
+                  const name = e.target.value;
+                  setSelectedReferenceProfile(name);
+
+                  const profile = referenceProfiles.find((p) => p.name === name);
+
+                  if (profile) {
+                    loadUserPreset(profile);
+                    setPreview(`Loaded reference profile:\n${profile.name}`);
+                  }
+                }}
+                className="mt-4 w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none"
+              >
+                <option value="">Select reference profile...</option>
+
+                {referenceProfiles.map((profile) => (
+                  <option key={profile.name} value={profile.name}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mt-6 rounded-3xl bg-white/[.04] p-5">
+              <h3 className="text-xl font-black">Import AutoEQ Profile</h3>
+              <p className="mt-2 text-sm leading-6 text-white/45">
+                Supports AutoEQ text files using Preamp and Filter lines.
+              </p>
+
+              <button
+                onClick={() => autoEqFileInputRef.current?.click()}
+                className="mt-5 rounded-full bg-[#1ed760] px-5 py-3 text-sm font-black text-black"
+              >
+                Import AutoEQ TXT / ZIP
+              </button>
+
+              <input
+                ref={autoEqFileInputRef}
+                type="file"
+                accept=".txt,.eq,.json,.csv,.zip"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+
+                  if (file) {
+                    importAutoEqProfile(file);
+                  }
+
+                  e.target.value = "";
+                }}
+              />
+            </div>
+
+            <div className="mt-6 rounded-3xl bg-white/[.04] p-5">
+              <h3 className="text-xl font-black">Expected Format</h3>
+
+              <pre className="mt-4 overflow-auto rounded-2xl bg-black/60 p-4 text-xs leading-6 text-white/60">
+                {`Preamp: -6.0 dB
+                Filter 1: ON PK Fc 105 Hz Gain 3.2 dB Q 0.70
+                Filter 2: ON PK Fc 220 Hz Gain -2.1 dB Q 1.20
+                Filter 3: ON HSC Fc 8000 Hz Gain 1.5 dB Q 0.70`}
+              </pre>
+            </div>
+            <div className="mt-6 rounded-3xl bg-white/[.04] p-5">
+              <h3 className="text-xl font-black">Imported Reference Profiles</h3>
+
+              <div className="mt-4 space-y-3">
+                {referenceProfiles.length === 0 ? (
+                  <div className="rounded-3xl bg-black/40 p-4 text-sm text-white/40">
+                    No reference profiles imported yet.
+                  </div>
+                ) : (
+                  referenceProfiles.map((profile) => (
+                    <div
+                      key={profile.name}
+                      className="flex items-center justify-between rounded-3xl bg-white/[.045] p-4"
+                    >
+                      <button onClick={() => loadUserPreset(profile)} className="text-left">
+                        <div className="font-black">🎧 {profile.name}</div>
+
+                        <div className="mt-1 text-xs text-white/40">
+                          {profile.brand} · {profile.model} · {profile.target}
+                        </div>
+                      </button>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => loadUserPreset(profile)}
+                          className="rounded-full bg-[#1ed760] px-4 py-2 text-xs font-black text-black"
+                        >
+                          Load
+                        </button>
+
+                        <button
+                          onClick={() => deleteUserPreset(profile.name)}
+                          className="rounded-full border border-red-500/30 px-4 py-2 text-xs font-black text-red-300"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         )}

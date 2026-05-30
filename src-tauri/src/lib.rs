@@ -28,6 +28,10 @@ struct PresetFile {
     graphic_bands: Vec<f32>,
     parametric_bands: Vec<ParamBand>,
     favorite: Option<bool>,
+    category: Option<String>,
+    brand: Option<String>,
+    model: Option<String>,
+    target: Option<String>,
 }
 
 #[derive(Default)]

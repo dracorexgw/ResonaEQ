@@ -7,3 +7,19 @@ export type ParamBand = {
   color: string;
   enabled: boolean;
 };
+
+export type EqState = {
+  mode: "graphic" | "parametric";
+  preamp: number;
+  graphicBands: number[];
+  parametricBands: ParamBand[];
+};
+
+export type PresetFile = EqState & {
+  name: string;
+  favorite?: boolean;
+  category?: string;
+  brand?: string;
+  model?: string;
+  target?: string;
+};

@@ -15,6 +15,7 @@
     "@tauri-apps/api": "latest",
     "@tauri-apps/plugin-autostart": "latest",
     "@tauri-apps/plugin-shell": "latest",
+    "jszip": "^3.10.1",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest"
