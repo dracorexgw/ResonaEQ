@@ -48,7 +48,7 @@ npm run tauri dev
 - Rust commands: `src-tauri/src/lib.rs`
 - Tauri config: `src-tauri/tauri.conf.json`
 
-# ResonaEQ v1.0.0
+# ResonaEQ v1.1.0
 
 A modern real-time system-wide audio equalizer for Windows.
 
