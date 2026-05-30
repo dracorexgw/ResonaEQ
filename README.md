@@ -390,6 +390,71 @@ Verify:
 
 # Roadmap
 
+## v2.0.0 — Resona Audio Platform
+
+* Resona Virtual Audio Device
+* Virtual Playback Device
+* Virtual Recording Device
+* OBS Native Integration
+* Multi-Channel Audio Routing
+* Streamer Mode
+* Creator Mode
+
+## v2.1.0 — Reference Edition
+
+* AutoEQ Batch Folder Import
+* Reference Profile Statistics
+* Headphone Comparison Mode
+* Multiple Target Curves (Harman, Diffuse Field, Studio Flat)
+* Custom Reference Targets
+* Profile Versioning
+* Backup & Restore Library
+
+## v2.2.0
+
+* Headphone Image Library
+* AutoEQ Online Repository
+* One-Click Profile Downloads
+* Featured Headphone Database
+* Community Reference Profiles
+
+## v2.5.0
+
+* OBS Recording Mode
+* Post-DSP Recording Support
+* Resona Monitor Device
+* Improved Device Switching
+* Audio Routing Diagnostics
+* Live Engine Stability Improvements
+* Enhanced Latency Monitoring
+
+## v2.6.0
+
+* Enhanced FFT Analyzer
+* Reference Library Search
+* Reference Library Filtering
+* Preset Renaming
+* Preset Duplication
+* Bulk Preset Actions
+* Profile Import/Export Improvements
+
+## Future
+
+* APO-Based System-Wide Processing
+* Crossfeed
+* Convolution Filters
+* FIR Filter Support
+* Room Correction
+* Speaker Calibration
+* Per-Device Profiles
+* Cloud Sync
+* Mobile Companion App
+* macOS Support
+* Linux Support
+
+---
+
+
 ## Future
 
 - APO-Based System-Wide Processing
